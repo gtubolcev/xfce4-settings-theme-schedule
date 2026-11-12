@@ -36,7 +36,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01Np2p5AqKgTNgtBXcQRY3bY
 Claude-Session: https://claude.ai/code/session_015b974heChUULfSFVyi9jWe
 ---
- common/backlight.h                      |  110 ++
+ common/backlight.h                      |  142 ++
  common/color-temperature.h              |  119 ++
  common/debug.c                          |    1 +
  common/debug.h                          |    1 +
@@ -44,12 +44,12 @@ Claude-Session: https://claude.ai/code/session_015b974heChUULfSFVyi9jWe
  common/theme-schedule.h                 |   66 +
  common/theme-variant.h                  |  150 ++
  dialogs/appearance-settings/Makefile.am |    3 +-
- dialogs/appearance-settings/main.c      | 1871 ++++++++++++++++++++++-
+ dialogs/appearance-settings/main.c      | 1875 ++++++++++++++++++++++-
  xfsettingsd/Makefile.am                 |    7 +-
  xfsettingsd/main.c                      |    4 +
- xfsettingsd/theme-schedule.c            | 1013 ++++++++++++
+ xfsettingsd/theme-schedule.c            | 1072 +++++++++++++
  xfsettingsd/theme-schedule.h            |   31 +
- 13 files changed, 3756 insertions(+), 26 deletions(-)
+ 13 files changed, 3851 insertions(+), 26 deletions(-)
  create mode 100644 common/backlight.h
  create mode 100644 common/color-temperature.h
  create mode 100644 common/sun-times.h
@@ -60,10 +60,10 @@ Claude-Session: https://claude.ai/code/session_015b974heChUULfSFVyi9jWe
 
 diff --git a/common/backlight.h b/common/backlight.h
 new file mode 100644
-index 00000000..094cce60
+index 00000000..3437eeaf
 --- /dev/null
 +++ b/common/backlight.h
-@@ -0,0 +1,110 @@
+@@ -0,0 +1,142 @@
 +/*
 + *  Copyright (c) 2026 Grigory Tuboltsev <gtubolcev@gmail.com>
 + *
@@ -86,14 +86,15 @@ index 00000000..094cce60
 + * Shared by the appearance dialog and xfsettingsd (header only, like
 + * theme-variant.h): finding the screen backlight in /sys/class/backlight.
 + * Like in GNOME, firmware interfaces are preferred over platform ones and
-+ * those over raw ones. Writing the brightness needs root,
-+ * so xfsettingsd sets it through logind.
++ * those over raw ones. The brightness is set by xfce4-power-manager over
++ * D-Bus when it offers that (GetBrightness / SetBrightness); otherwise
++ * xfsettingsd sets it through logind, since writing it needs root.
 + */
 +
 +#ifndef __BACKLIGHT_H__
 +#define __BACKLIGHT_H__
 +
-+#include <glib.h>
++#include <gio/gio.h>
 +
 +G_BEGIN_DECLS
 +
@@ -169,6 +170,37 @@ index 00000000..094cce60
 +        return 0;
 +
 +    return (backlight_read_value (device, "brightness") * 100 + max / 2) / max;
++}
++
++#define BACKLIGHT_XFPM_NAME "org.xfce.PowerManager"
++#define BACKLIGHT_XFPM_PATH "/org/xfce/PowerManager"
++#define BACKLIGHT_XFPM_INTERFACE "org.xfce.Power.Manager"
++
++/* the brightness in percent from xfce4-power-manager, or -1 if it is not
++ * running, found no backlight or is too old to offer GetBrightness */
++static inline gint
++backlight_xfpm_get_percent (void)
++{
++    GDBusConnection *bus;
++    GVariant *ret;
++    gint percent = -1;
++
++    bus = g_bus_get_sync (G_BUS_TYPE_SESSION, NULL, NULL);
++    if (bus == NULL)
++        return -1;
++
++    ret = g_dbus_connection_call_sync (bus, BACKLIGHT_XFPM_NAME, BACKLIGHT_XFPM_PATH,
++                                       BACKLIGHT_XFPM_INTERFACE, "GetBrightness", NULL,
++                                       G_VARIANT_TYPE ("(i)"), G_DBUS_CALL_FLAGS_NO_AUTO_START,
++                                       1000, NULL, NULL);
++    if (ret != NULL)
++    {
++        g_variant_get (ret, "(i)", &percent);
++        g_variant_unref (ret);
++    }
++    g_object_unref (bus);
++
++    return percent;
 +}
 +
 +G_END_DECLS
@@ -978,7 +1010,7 @@ index 180af5ab..f72eae4a 100644
  xfce4_appearance_scriptsdir = $(HELPER_PATH_PREFIX)/xfce4/settings
  xfce4_appearance_scripts_SCRIPTS = appearance-install-theme
 diff --git a/dialogs/appearance-settings/main.c b/dialogs/appearance-settings/main.c
-index 3257b2a9..15af303a 100644
+index 3257b2a9..605c45ad 100644
 --- a/dialogs/appearance-settings/main.c
 +++ b/dialogs/appearance-settings/main.c
 @@ -23,6 +23,12 @@
@@ -1111,7 +1143,7 @@ index 3257b2a9..15af303a 100644
      }
      else if (strcmp (property_name, "/Net/IconThemeName") == 0)
      {
-@@ -1662,6 +1706,1786 @@ appearance_settings_dialog_configure_widgets (GtkBuilder *builder)
+@@ -1662,6 +1706,1790 @@ appearance_settings_dialog_configure_widgets (GtkBuilder *builder)
  #endif
  }
  
@@ -2133,6 +2165,7 @@ index 3257b2a9..15af303a 100644
 +    GtkWidget *temperature_check, *temperature_spin, *fade_label, *fade_spin, *fade_box;
 +    gchar *time_str, *theme, *xfwm4, *icon_theme, *cursor_theme, *brightness, *command, *title, *current;
 +    gchar *backlight, *temperature;
++    gint backlight_percent;
 +    gint kelvin = 4500, fade_minutes = 60;
 +    gboolean has_temperature;
 +    GPtrArray *cursor_themes;
@@ -2214,21 +2247,24 @@ index 3257b2a9..15af303a 100644
 +
 +    /* screen backlight, by default at its current level */
 +    backlight = backlight_find_device ();
++    backlight_percent = backlight_xfpm_get_percent ();
++    if (backlight_percent < 0 && backlight != NULL)
++        backlight_percent = backlight_get_percent (backlight);
 +    brightness_check = gtk_check_button_new_with_mnemonic (_("Set the screen _brightness to:"));
 +    gtk_grid_attach (GTK_GRID (grid), brightness_check, 0, row, 1, 1);
 +    box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
 +    brightness_spin = gtk_spin_button_new_with_range (1, 100, 5);
 +    gtk_spin_button_set_value (GTK_SPIN_BUTTON (brightness_spin),
 +                               *brightness != '\0' ? g_ascii_strtod (brightness, NULL)
-+                               : backlight != NULL ? backlight_get_percent (backlight)
-+                                                   : 100);
++                               : backlight_percent >= 0 ? MAX (backlight_percent, 1)
++                                                        : 100);
 +    gtk_entry_set_activates_default (GTK_ENTRY (brightness_spin), TRUE);
 +    gtk_box_pack_start (GTK_BOX (box), brightness_spin, FALSE, FALSE, 0);
 +    gtk_box_pack_start (GTK_BOX (box), gtk_label_new ("%"), FALSE, FALSE, 0);
 +    g_object_bind_property (brightness_check, "active", box, "sensitive", G_BINDING_SYNC_CREATE);
 +    gtk_grid_attach (GTK_GRID (grid), box, 1, row++, 1, 1);
 +    gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (brightness_check), *brightness != '\0');
-+    if (backlight == NULL)
++    if (backlight_percent < 0)
 +    {
 +        /* e.g. external monitors: keep a saved value, but do not offer it */
 +        gtk_widget_set_sensitive (brightness_check, *brightness != '\0');
@@ -2898,7 +2934,7 @@ index 3257b2a9..15af303a 100644
  static void
  appearance_settings_dialog_response (GtkWidget *dialog,
                                       gint response_id)
-@@ -1758,6 +3582,7 @@ main (gint argc,
+@@ -1758,6 +3586,7 @@ main (gint argc,
                                G_CALLBACK (appearance_settings_dialog_channel_property_changed), builder);
  
              appearance_settings_dialog_configure_widgets (builder);
@@ -2969,10 +3005,10 @@ index 1e4474e8..b6af3e37 100644
  #endif
 diff --git a/xfsettingsd/theme-schedule.c b/xfsettingsd/theme-schedule.c
 new file mode 100644
-index 00000000..53f12561
+index 00000000..3f2f4633
 --- /dev/null
 +++ b/xfsettingsd/theme-schedule.c
-@@ -0,0 +1,1013 @@
+@@ -0,0 +1,1072 @@
 +/*
 + *  Copyright (c) 2026 Grigory Tuboltsev <gtubolcev@gmail.com>
 + *
@@ -3321,9 +3357,9 @@ index 00000000..53f12561
 +
 +
 +static void
-+xfce_theme_schedule_set_brightness_done (GObject *source,
-+                                         GAsyncResult *result,
-+                                         gpointer user_data)
++xfce_theme_schedule_set_brightness_logind_done (GObject *source,
++                                                GAsyncResult *result,
++                                                gpointer user_data)
 +{
 +    GVariant *ret;
 +    GError *error = NULL;
@@ -3343,20 +3379,12 @@ index 00000000..53f12561
 +/* sets the screen backlight to @percent of its maximum through logind, which
 + * lets the user of the session do so without root */
 +static void
-+xfce_theme_schedule_helper_set_brightness (XfceThemeScheduleHelper *helper,
-+                                           const gchar *percent)
++xfce_theme_schedule_set_brightness_logind (guint percent)
 +{
 +    guint64 value, max;
-+    gchar *device, *end;
++    gchar *device;
 +    GDBusConnection *bus;
 +    GError *error = NULL;
-+
-+    value = g_ascii_strtoull (percent, &end, 10);
-+    if (*end != '\0' || value < 1 || value > 100)
-+    {
-+        g_warning ("Invalid scheduled brightness '%s'", percent);
-+        return;
-+    }
 +
 +    device = backlight_find_device ();
 +    if (device == NULL)
@@ -3369,12 +3397,12 @@ index 00000000..53f12561
 +    if (bus != NULL)
 +    {
 +        max = backlight_read_value (device, "max_brightness");
-+        value = MAX ((max * value + 50) / 100, 1);
++        value = MAX ((max * percent + 50) / 100, 1);
 +        g_dbus_connection_call (bus, "org.freedesktop.login1", "/org/freedesktop/login1/session/auto",
 +                                "org.freedesktop.login1.Session", "SetBrightness",
 +                                g_variant_new ("(ssu)", "backlight", device, (guint32) value),
 +                                NULL, G_DBUS_CALL_FLAGS_NONE, -1, NULL,
-+                                xfce_theme_schedule_set_brightness_done, NULL);
++                                xfce_theme_schedule_set_brightness_logind_done, NULL);
 +        g_object_unref (bus);
 +    }
 +    else
@@ -3384,6 +3412,73 @@ index 00000000..53f12561
 +    }
 +
 +    g_free (device);
++}
++
++
++
++static void
++xfce_theme_schedule_set_brightness_done (GObject *source,
++                                         GAsyncResult *result,
++                                         gpointer user_data)
++{
++    GVariant *ret;
++    GError *error = NULL;
++
++    ret = g_dbus_connection_call_finish (G_DBUS_CONNECTION (source), result, &error);
++    if (ret != NULL)
++    {
++        xfsettings_dbg (XFSD_DEBUG_THEME_SCHEDULE, "Brightness set by the power manager");
++        g_variant_unref (ret);
++        return;
++    }
++
++    if (g_error_matches (error, G_DBUS_ERROR, G_DBUS_ERROR_SERVICE_UNKNOWN)
++        || g_error_matches (error, G_DBUS_ERROR, G_DBUS_ERROR_NAME_HAS_NO_OWNER)
++        || g_error_matches (error, G_DBUS_ERROR, G_DBUS_ERROR_UNKNOWN_METHOD))
++    {
++        /* no power manager, or one without SetBrightness */
++        xfsettings_dbg (XFSD_DEBUG_THEME_SCHEDULE, "Power manager cannot set the brightness (%s), using logind",
++                        error->message);
++        xfce_theme_schedule_set_brightness_logind (GPOINTER_TO_UINT (user_data));
++    }
++    else
++        g_warning ("Failed to set the brightness: %s", error->message);
++
++    g_error_free (error);
++}
++
++
++
++/* sets the screen backlight to @percent of its maximum: through
++ * xfce4-power-manager, so that it knows the new level (e.g. to restore it
++ * after dimming the screen for inactivity), or through logind without it */
++static void
++xfce_theme_schedule_helper_set_brightness (XfceThemeScheduleHelper *helper,
++                                           const gchar *percent)
++{
++    guint64 value;
++    gchar *end;
++    GDBusConnection *bus;
++
++    value = g_ascii_strtoull (percent, &end, 10);
++    if (*end != '\0' || value < 1 || value > 100)
++    {
++        g_warning ("Invalid scheduled brightness '%s'", percent);
++        return;
++    }
++
++    bus = g_bus_get_sync (G_BUS_TYPE_SESSION, NULL, NULL);
++    if (bus == NULL)
++    {
++        xfce_theme_schedule_set_brightness_logind (value);
++        return;
++    }
++
++    g_dbus_connection_call (bus, BACKLIGHT_XFPM_NAME, BACKLIGHT_XFPM_PATH, BACKLIGHT_XFPM_INTERFACE,
++                            "SetBrightness", g_variant_new ("(i)", (gint32) value),
++                            NULL, G_DBUS_CALL_FLAGS_NO_AUTO_START, -1, NULL,
++                            xfce_theme_schedule_set_brightness_done, GUINT_TO_POINTER ((guint) value));
++    g_object_unref (bus);
 +}
 +
 +
