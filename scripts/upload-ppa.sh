@@ -79,6 +79,9 @@ SRCDIR=$(find . -mindepth 1 -maxdepth 1 -type d | head -1)
 cd "$SRCDIR"
 
 mapfile -t PATCHES < <(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "$PATCHDIR/series")
+# some packages (e.g. xfce4-power-manager) have no patches of their own
+mkdir -p debian/patches
+touch debian/patches/series
 for p in "${PATCHES[@]}"; do
   cp "$PATCHDIR/$p" "debian/patches/xfcepatches-$p"
   echo "xfcepatches-$p" >> debian/patches/series
