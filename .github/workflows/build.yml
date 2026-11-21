@@ -174,16 +174,18 @@ jobs:
           cat >> notes.md <<'EOF'
           Packages for amd64. Pick the files for your distribution by the version in their names:
 
-          | Distribution | Xfce | xfce4-settings files |
-          |---|---|---|
-          | Xubuntu 26.04 (resolute) | 4.20 | `*_4.20.1-1ubuntu*` |
-          | Xubuntu 24.04 (noble), Linux Mint 22 | 4.18 | `*_4.18.4-*` |
-          | Debian 13 (trixie), MX Linux 25 | 4.20 | `*_4.20.1-1+xfcepatches*` (no `ubuntu` in the name) |
-          | Arch Linux, Manjaro, EndeavourOS | 4.20 | `xfce4-settings-xfcepatches-*.pkg.tar.zst` |
+          | Distribution | Xfce | xfce4-settings files | xfce4-power-manager files |
+          |---|---|---|---|
+          | Xubuntu 26.04 (resolute) | 4.20 | `*_4.20.1-1ubuntu*` | `*_4.20.0-1build1+xfcepatches*` |
+          | Xubuntu 24.04 (noble), Linux Mint 22 | 4.18 | `*_4.18.4-*` | — |
+          | Debian 13 (trixie), MX Linux 25 | 4.20 | `*_4.20.1-1+xfcepatches*` (no `ubuntu` in the name) | `*_4.20.0-1+xfcepatches*` |
+          | Arch Linux, Manjaro, EndeavourOS | 4.20 | `xfce4-settings-xfcepatches-*.pkg.tar.zst` | — |
+
+          The patched xfce4-power-manager lets the schedule set the screen brightness through it ([xfce4-power-manager!120](https://gitlab.xfce.org/xfce/xfce4-power-manager/-/merge_requests/120)), so that it restores the scheduled level after dimming the screen; without it the brightness is set through logind.
 
           The Thunar disk usage plugin has moved to [its own repository](https://github.com/gtubolcev/thunar-disk-usage).
 
-          **Ubuntu, Debian:** download all `.deb` files for your release (e.g. both `xfce4-settings` and `xfce4-helpers`) into an empty folder and install them together:
+          **Ubuntu, Debian:** download all `.deb` files for your release (e.g. `xfce4-settings`, `xfce4-helpers` and the three `xfce4-power-manager` packages) into an empty folder and install them together:
 
           ```
           sudo apt install ./*.deb

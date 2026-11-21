@@ -41,15 +41,15 @@ Claude-Session: https://claude.ai/code/session_015b974heChUULfSFVyi9jWe
  common/debug.c                          |    1 +
  common/debug.h                          |    1 +
  common/sun-times.h                      |  406 +++++
- common/theme-schedule.h                 |   66 +
+ common/theme-schedule.h                 |   78 +
  common/theme-variant.h                  |  150 ++
  dialogs/appearance-settings/Makefile.am |    3 +-
- dialogs/appearance-settings/main.c      | 1875 ++++++++++++++++++++++-
+ dialogs/appearance-settings/main.c      | 1877 ++++++++++++++++++++++-
  xfsettingsd/Makefile.am                 |    7 +-
  xfsettingsd/main.c                      |    4 +
- xfsettingsd/theme-schedule.c            | 1072 +++++++++++++
+ xfsettingsd/theme-schedule.c            | 1157 ++++++++++++++
  xfsettingsd/theme-schedule.h            |   31 +
- 13 files changed, 3851 insertions(+), 26 deletions(-)
+ 13 files changed, 3950 insertions(+), 26 deletions(-)
  create mode 100644 common/backlight.h
  create mode 100644 common/color-temperature.h
  create mode 100644 common/sun-times.h
@@ -769,10 +769,10 @@ index 00000000..eea51854
 +#endif /* !__SUN_TIMES_H__ */
 diff --git a/common/theme-schedule.h b/common/theme-schedule.h
 new file mode 100644
-index 00000000..b5d83327
+index 00000000..061b20cb
 --- /dev/null
 +++ b/common/theme-schedule.h
-@@ -0,0 +1,66 @@
+@@ -0,0 +1,78 @@
 +/*
 + *  Copyright (c) 2026 Grigory Tuboltsev <gtubolcev@gmail.com>
 + *
@@ -835,6 +835,18 @@ index 00000000..b5d83327
 +    THEME_SCHEDULE_PROP_PREFIX "Commands",
 +    THEME_SCHEDULE_PROP_PREFIX "ColorTemperatures",
 +};
++
++/* the screen brightness of a rule in percent, or -1 if unset or invalid */
++static inline gint
++theme_schedule_parse_brightness (const gchar *str)
++{
++    gint64 percent;
++
++    if (str == NULL || !g_ascii_string_to_signed (str, 10, 0, 100, &percent, NULL))
++        return -1;
++
++    return percent;
++}
 +
 +G_END_DECLS
 +
@@ -1010,7 +1022,7 @@ index 180af5ab..f72eae4a 100644
  xfce4_appearance_scriptsdir = $(HELPER_PATH_PREFIX)/xfce4/settings
  xfce4_appearance_scripts_SCRIPTS = appearance-install-theme
 diff --git a/dialogs/appearance-settings/main.c b/dialogs/appearance-settings/main.c
-index 3257b2a9..605c45ad 100644
+index 3257b2a9..f6fade10 100644
 --- a/dialogs/appearance-settings/main.c
 +++ b/dialogs/appearance-settings/main.c
 @@ -23,6 +23,12 @@
@@ -1143,7 +1155,7 @@ index 3257b2a9..605c45ad 100644
      }
      else if (strcmp (property_name, "/Net/IconThemeName") == 0)
      {
-@@ -1662,6 +1706,1790 @@ appearance_settings_dialog_configure_widgets (GtkBuilder *builder)
+@@ -1662,6 +1706,1792 @@ appearance_settings_dialog_configure_widgets (GtkBuilder *builder)
  #endif
  }
  
@@ -1400,7 +1412,7 @@ index 3257b2a9..605c45ad 100644
 +
 +    n_more = (icon_theme != NULL && *icon_theme != '\0')
 +             + (cursor_theme != NULL && *cursor_theme != '\0')
-+             + (brightness != NULL && *brightness != '\0')
++             + (theme_schedule_parse_brightness (brightness) >= 0)
 +             + (command != NULL && *command != '\0')
 +             + (temperature != NULL && *temperature != '\0');
 +    if (n_more > 0)
@@ -2165,7 +2177,7 @@ index 3257b2a9..605c45ad 100644
 +    GtkWidget *temperature_check, *temperature_spin, *fade_label, *fade_spin, *fade_box;
 +    gchar *time_str, *theme, *xfwm4, *icon_theme, *cursor_theme, *brightness, *command, *title, *current;
 +    gchar *backlight, *temperature;
-+    gint backlight_percent;
++    gint backlight_percent, saved_brightness;
 +    gint kelvin = 4500, fade_minutes = 60;
 +    gboolean has_temperature;
 +    GPtrArray *cursor_themes;
@@ -2245,7 +2257,9 @@ index 3257b2a9..605c45ad 100644
 +    gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (cursor_check), *cursor_theme != '\0');
 +    g_free (current);
 +
-+    /* screen backlight, by default at its current level */
++    /* screen backlight, by default at its current level; an invalid saved
++     * value is dropped */
++    saved_brightness = theme_schedule_parse_brightness (brightness);
 +    backlight = backlight_find_device ();
 +    backlight_percent = backlight_xfpm_get_percent ();
 +    if (backlight_percent < 0 && backlight != NULL)
@@ -2253,21 +2267,21 @@ index 3257b2a9..605c45ad 100644
 +    brightness_check = gtk_check_button_new_with_mnemonic (_("Set the screen _brightness to:"));
 +    gtk_grid_attach (GTK_GRID (grid), brightness_check, 0, row, 1, 1);
 +    box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
-+    brightness_spin = gtk_spin_button_new_with_range (1, 100, 5);
++    brightness_spin = gtk_spin_button_new_with_range (0, 100, 5);
 +    gtk_spin_button_set_value (GTK_SPIN_BUTTON (brightness_spin),
-+                               *brightness != '\0' ? g_ascii_strtod (brightness, NULL)
-+                               : backlight_percent >= 0 ? MAX (backlight_percent, 1)
++                               saved_brightness >= 0    ? saved_brightness
++                               : backlight_percent >= 0 ? backlight_percent
 +                                                        : 100);
 +    gtk_entry_set_activates_default (GTK_ENTRY (brightness_spin), TRUE);
 +    gtk_box_pack_start (GTK_BOX (box), brightness_spin, FALSE, FALSE, 0);
 +    gtk_box_pack_start (GTK_BOX (box), gtk_label_new ("%"), FALSE, FALSE, 0);
 +    g_object_bind_property (brightness_check, "active", box, "sensitive", G_BINDING_SYNC_CREATE);
 +    gtk_grid_attach (GTK_GRID (grid), box, 1, row++, 1, 1);
-+    gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (brightness_check), *brightness != '\0');
++    gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (brightness_check), saved_brightness >= 0);
 +    if (backlight_percent < 0)
 +    {
 +        /* e.g. external monitors: keep a saved value, but do not offer it */
-+        gtk_widget_set_sensitive (brightness_check, *brightness != '\0');
++        gtk_widget_set_sensitive (brightness_check, saved_brightness >= 0);
 +        gtk_widget_set_tooltip_text (brightness_check, _("No screen backlight was found."));
 +    }
 +    g_free (backlight);
@@ -2418,7 +2432,7 @@ index 3257b2a9..605c45ad 100644
 +        g_ptr_array_add (parts, g_strdup (_("icons")));
 +    if (cursor_theme != NULL && *cursor_theme != '\0')
 +        g_ptr_array_add (parts, g_strdup (_("cursor")));
-+    if (brightness != NULL && *brightness != '\0')
++    if (theme_schedule_parse_brightness (brightness) >= 0)
 +        /* TRANSLATORS: the screen brightness set by a rule, in the More column, e.g. "brightness 40%" */
 +        g_ptr_array_add (parts, g_strdup_printf (_("brightness %s%%"), brightness));
 +    if (color_temperature_parse (temperature, &kelvin, &fade_minutes))
@@ -2934,7 +2948,7 @@ index 3257b2a9..605c45ad 100644
  static void
  appearance_settings_dialog_response (GtkWidget *dialog,
                                       gint response_id)
-@@ -1758,6 +3586,7 @@ main (gint argc,
+@@ -1758,6 +3588,7 @@ main (gint argc,
                                G_CALLBACK (appearance_settings_dialog_channel_property_changed), builder);
  
              appearance_settings_dialog_configure_widgets (builder);
@@ -3005,10 +3019,10 @@ index 1e4474e8..b6af3e37 100644
  #endif
 diff --git a/xfsettingsd/theme-schedule.c b/xfsettingsd/theme-schedule.c
 new file mode 100644
-index 00000000..3f2f4633
+index 00000000..3a9108ed
 --- /dev/null
 +++ b/xfsettingsd/theme-schedule.c
-@@ -0,0 +1,1072 @@
+@@ -0,0 +1,1157 @@
 +/*
 + *  Copyright (c) 2026 Grigory Tuboltsev <gtubolcev@gmail.com>
 + *
@@ -3045,7 +3059,7 @@ index 00000000..3f2f4633
 + *                                     follow /Xfce/SyncThemes
 + *   /Xfce/ThemeSchedule/IconThemes    like Themes, for the icon theme
 + *   /Xfce/ThemeSchedule/CursorThemes  cursor theme name, "" to keep it
-+ *   /Xfce/ThemeSchedule/Brightness    screen backlight in percent (1-100),
++ *   /Xfce/ThemeSchedule/Brightness    screen backlight in percent (0-100),
 + *                                     "" to keep it
 + *   /Xfce/ThemeSchedule/ColorTemperatures
 + *                                     "<kelvin>:<minutes>", the color temperature
@@ -3107,6 +3121,10 @@ index 00000000..3f2f4633
 +/* the dialog writes the rules as several properties, so wait for the last */
 +#define RULES_CHANGED_DELAY_MS 250
 +
++/* how long a scheduled brightness waits for xfce4-power-manager to start,
++ * e.g. after login, before it is set through logind */
++#define POWER_MANAGER_WAIT_SECONDS 60
++
 +/* where to look up a theme of some kind */
 +typedef struct
 +{
@@ -3160,6 +3178,12 @@ index 00000000..3f2f4633
 +     * update) and the color temperature it started from */
 +    gint64 fade_at;
 +    gint fade_from;
++
++    /* the scheduled brightness until it is set, e.g. once xfce4-power-manager
++     * is running after login, or -1 */
++    gint brightness;
++    guint power_manager_watch_id;
++    guint power_manager_timeout_id;
 +};
 +
 +
@@ -3199,6 +3223,7 @@ index 00000000..3f2f4633
 +    helper->crtc_gamma = g_hash_table_new_full (NULL, NULL, NULL, g_free);
 +    helper->kelvin = COLOR_TEMPERATURE_NEUTRAL;
 +    helper->fade_at = -1;
++    helper->brightness = -1;
 +
 +    helper->channel = xfconf_channel_get ("xsettings");
 +    g_signal_connect (helper->channel, "property-changed",
@@ -3219,6 +3244,8 @@ index 00000000..3f2f4633
 +
 +    g_clear_handle_id (&helper->timer_id, g_source_remove);
 +    g_clear_handle_id (&helper->rules_changed_id, g_source_remove);
++    g_clear_handle_id (&helper->power_manager_watch_id, g_bus_unwatch_name);
++    g_clear_handle_id (&helper->power_manager_timeout_id, g_source_remove);
 +    g_free (helper->location_key);
 +
 +    /* put the gamma ramps back */
@@ -3417,67 +3444,129 @@ index 00000000..3f2f4633
 +
 +
 +static void
-+xfce_theme_schedule_set_brightness_done (GObject *source,
-+                                         GAsyncResult *result,
-+                                         gpointer user_data)
++xfce_theme_schedule_helper_send_brightness (XfceThemeScheduleHelper *helper);
++
++
++
++/* xfce4-power-manager is gone or too old: set the waiting brightness through
++ * logind instead */
++static void
++xfce_theme_schedule_helper_brightness_fallback (XfceThemeScheduleHelper *helper)
 +{
-+    GVariant *ret;
-+    GError *error = NULL;
++    g_clear_handle_id (&helper->power_manager_watch_id, g_bus_unwatch_name);
++    g_clear_handle_id (&helper->power_manager_timeout_id, g_source_remove);
 +
-+    ret = g_dbus_connection_call_finish (G_DBUS_CONNECTION (source), result, &error);
-+    if (ret != NULL)
-+    {
-+        xfsettings_dbg (XFSD_DEBUG_THEME_SCHEDULE, "Brightness set by the power manager");
-+        g_variant_unref (ret);
-+        return;
-+    }
-+
-+    if (g_error_matches (error, G_DBUS_ERROR, G_DBUS_ERROR_SERVICE_UNKNOWN)
-+        || g_error_matches (error, G_DBUS_ERROR, G_DBUS_ERROR_NAME_HAS_NO_OWNER)
-+        || g_error_matches (error, G_DBUS_ERROR, G_DBUS_ERROR_UNKNOWN_METHOD))
-+    {
-+        /* no power manager, or one without SetBrightness */
-+        xfsettings_dbg (XFSD_DEBUG_THEME_SCHEDULE, "Power manager cannot set the brightness (%s), using logind",
-+                        error->message);
-+        xfce_theme_schedule_set_brightness_logind (GPOINTER_TO_UINT (user_data));
-+    }
-+    else
-+        g_warning ("Failed to set the brightness: %s", error->message);
-+
-+    g_error_free (error);
++    if (helper->brightness >= 0)
++        xfce_theme_schedule_set_brightness_logind (helper->brightness);
++    helper->brightness = -1;
 +}
 +
 +
 +
-+/* sets the screen backlight to @percent of its maximum: through
-+ * xfce4-power-manager, so that it knows the new level (e.g. to restore it
-+ * after dimming the screen for inactivity), or through logind without it */
 +static void
-+xfce_theme_schedule_helper_set_brightness (XfceThemeScheduleHelper *helper,
-+                                           const gchar *percent)
++xfce_theme_schedule_helper_power_manager_appeared (GDBusConnection *connection,
++                                                   const gchar *name,
++                                                   const gchar *name_owner,
++                                                   gpointer user_data)
 +{
-+    guint64 value;
-+    gchar *end;
++    XfceThemeScheduleHelper *helper = user_data;
++
++    g_clear_handle_id (&helper->power_manager_watch_id, g_bus_unwatch_name);
++    g_clear_handle_id (&helper->power_manager_timeout_id, g_source_remove);
++    xfce_theme_schedule_helper_send_brightness (helper);
++}
++
++
++
++static gboolean
++xfce_theme_schedule_helper_power_manager_timeout (gpointer user_data)
++{
++    XfceThemeScheduleHelper *helper = user_data;
++
++    helper->power_manager_timeout_id = 0;
++    xfsettings_dbg (XFSD_DEBUG_THEME_SCHEDULE, "No power manager appeared, using logind");
++    xfce_theme_schedule_helper_brightness_fallback (helper);
++
++    return G_SOURCE_REMOVE;
++}
++
++
++
++static void
++xfce_theme_schedule_helper_brightness_sent (GObject *source,
++                                            GAsyncResult *result,
++                                            gpointer user_data)
++{
++    XfceThemeScheduleHelper *helper = user_data;
++    GError *error = NULL;
++    GVariant *reply = g_dbus_connection_call_finish (G_DBUS_CONNECTION (source), result, &error);
++
++    if (reply != NULL)
++    {
++        xfsettings_dbg (XFSD_DEBUG_THEME_SCHEDULE, "Brightness set by the power manager");
++        g_variant_unref (reply);
++        helper->brightness = -1;
++    }
++    else if (g_error_matches (error, G_DBUS_ERROR, G_DBUS_ERROR_SERVICE_UNKNOWN)
++             || g_error_matches (error, G_DBUS_ERROR, G_DBUS_ERROR_NAME_HAS_NO_OWNER))
++    {
++        /* xfce4-power-manager is not running yet, e.g. at login: set the
++         * brightness once it is, or through logind if it does not come */
++        xfsettings_dbg (XFSD_DEBUG_THEME_SCHEDULE, "Waiting for the power manager to set the brightness");
++        if (helper->power_manager_watch_id == 0)
++        {
++            helper->power_manager_watch_id = g_bus_watch_name (G_BUS_TYPE_SESSION, BACKLIGHT_XFPM_NAME,
++                                                               G_BUS_NAME_WATCHER_FLAGS_NONE,
++                                                               xfce_theme_schedule_helper_power_manager_appeared,
++                                                               NULL, helper, NULL);
++            helper->power_manager_timeout_id = g_timeout_add_seconds (POWER_MANAGER_WAIT_SECONDS,
++                                                                      xfce_theme_schedule_helper_power_manager_timeout,
++                                                                      helper);
++        }
++    }
++    else if (g_error_matches (error, G_DBUS_ERROR, G_DBUS_ERROR_UNKNOWN_METHOD)
++             || g_error_matches (error, G_DBUS_ERROR, G_DBUS_ERROR_UNKNOWN_INTERFACE)
++             || g_error_matches (error, G_DBUS_ERROR, G_DBUS_ERROR_UNKNOWN_OBJECT))
++    {
++        /* a power manager without SetBrightness */
++        xfsettings_dbg (XFSD_DEBUG_THEME_SCHEDULE, "Power manager cannot set the brightness (%s), using logind",
++                        error->message);
++        xfce_theme_schedule_helper_brightness_fallback (helper);
++    }
++    else
++    {
++        g_warning ("Failed to set the scheduled brightness: %s", error->message);
++        helper->brightness = -1;
++    }
++
++    g_clear_error (&error);
++    g_object_unref (helper);
++}
++
++
++
++/* sets the waiting brightness: through xfce4-power-manager, so that it knows
++ * the new level (e.g. to restore it after dimming the screen for inactivity),
++ * or through logind without it */
++static void
++xfce_theme_schedule_helper_send_brightness (XfceThemeScheduleHelper *helper)
++{
 +    GDBusConnection *bus;
 +
-+    value = g_ascii_strtoull (percent, &end, 10);
-+    if (*end != '\0' || value < 1 || value > 100)
-+    {
-+        g_warning ("Invalid scheduled brightness '%s'", percent);
++    if (helper->brightness < 0)
 +        return;
-+    }
 +
 +    bus = g_bus_get_sync (G_BUS_TYPE_SESSION, NULL, NULL);
 +    if (bus == NULL)
 +    {
-+        xfce_theme_schedule_set_brightness_logind (value);
++        xfce_theme_schedule_helper_brightness_fallback (helper);
 +        return;
 +    }
 +
 +    g_dbus_connection_call (bus, BACKLIGHT_XFPM_NAME, BACKLIGHT_XFPM_PATH, BACKLIGHT_XFPM_INTERFACE,
-+                            "SetBrightness", g_variant_new ("(i)", (gint32) value),
++                            "SetBrightness", g_variant_new ("(i)", (gint32) helper->brightness),
 +                            NULL, G_DBUS_CALL_FLAGS_NO_AUTO_START, -1, NULL,
-+                            xfce_theme_schedule_set_brightness_done, GUINT_TO_POINTER ((guint) value));
++                            xfce_theme_schedule_helper_brightness_sent, g_object_ref (helper));
 +    g_object_unref (bus);
 +}
 +
@@ -3703,7 +3792,10 @@ index 00000000..3f2f4633
 +        xfconf_channel_set_string (helper->channel, "/Gtk/CursorThemeName", rule[THEME_SCHEDULE_CURSOR_THEME]);
 +
 +    if (rule[THEME_SCHEDULE_BRIGHTNESS] != NULL && *rule[THEME_SCHEDULE_BRIGHTNESS] != '\0')
-+        xfce_theme_schedule_helper_set_brightness (helper, rule[THEME_SCHEDULE_BRIGHTNESS]);
++    {
++        helper->brightness = theme_schedule_parse_brightness (rule[THEME_SCHEDULE_BRIGHTNESS]);
++        xfce_theme_schedule_helper_send_brightness (helper);
++    }
 +
 +    if (rule[THEME_SCHEDULE_COMMAND] != NULL && *rule[THEME_SCHEDULE_COMMAND] != '\0')
 +        xfce_theme_schedule_helper_run_command (helper, rule[THEME_SCHEDULE_COMMAND]);
@@ -3974,6 +4066,13 @@ index 00000000..3f2f4633
 +        fields[f] = xfconf_channel_get_string_list (helper->channel, theme_schedule_properties[f]);
 +        n_fields[f] = fields[f] != NULL ? g_strv_length (fields[f]) : 0;
 +    }
++
++    /* an invalid brightness, e.g. set with xfconf-query, counts as unset, so
++     * that it neither replaces a valid one of an earlier rule nor makes a rule
++     * do something */
++    for (guint i = 0; i < n_fields[THEME_SCHEDULE_BRIGHTNESS]; i++)
++        if (theme_schedule_parse_brightness (fields[THEME_SCHEDULE_BRIGHTNESS][i]) < 0)
++            fields[THEME_SCHEDULE_BRIGHTNESS][i][0] = '\0';
 +
 +    xfce_theme_schedule_helper_update_location (helper);
 +

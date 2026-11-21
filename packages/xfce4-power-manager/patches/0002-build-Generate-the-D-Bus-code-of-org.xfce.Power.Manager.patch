@@ -1,0 +1,32 @@
+From: Grigory Tuboltsev <gtubolcev@gmail.com>
+Subject: [PATCH] build: Generate the D-Bus code of org.xfce.Power.Manager
+
+The release tarball ships the code gdbus-codegen made from
+org.xfce.Power.Manager.xml and generates it again only in maintainer
+mode. The previous patch adds methods to the interface, so generate it
+in every build. Packaging only, not for upstream.
+---
+
+--- a/src/Makefile.am
++++ b/src/Makefile.am
+@@ -169,6 +169,10 @@
+ 	org.freedesktop.PowerManagement.Inhibit.c \
+ 	org.freedesktop.PowerManagement.Inhibit.h
+ 
++# the D-Bus interface is patched, so its code is generated in every build
++xfce-power-manager-dbus.c xfce-power-manager-dbus.h: $(srcdir)/org.xfce.Power.Manager.xml
++	$(AM_V_GEN) $(GDBUS_CODEGEN) --interface-prefix=org.xfce. --c-namespace=Xfpm --generate-c-code=xfce-power-manager-dbus $<
++
+ if MAINTAINER_MODE
+ 
+ xfpm-marshal.c: xfpm-marshal.list
+@@ -178,9 +182,6 @@
+ xfpm-marshal.h: xfpm-marshal.list
+ 	glib-genmarshal $< --prefix=_xfpm_marshal --header > $@
+ 
+-xfce-power-manager-dbus.c xfce-power-manager-dbus.h: $(srcdir)/org.xfce.Power.Manager.xml
+-	$(AM_V_GEN) $(GDBUS_CODEGEN) --interface-prefix=org.xfce. --c-namespace=Xfpm --generate-c-code=xfce-power-manager-dbus $<
+-
+ org.freedesktop.PowerManagement.c org.freedesktop.PowerManagement.h: $(srcdir)/org.freedesktop.PowerManagement.xml
+ 	$(AM_V_GEN) $(GDBUS_CODEGEN) --interface-prefix=org.freedesktop. --c-namespace=Xfpm --generate-c-code=org.freedesktop.PowerManagement $<
+ 

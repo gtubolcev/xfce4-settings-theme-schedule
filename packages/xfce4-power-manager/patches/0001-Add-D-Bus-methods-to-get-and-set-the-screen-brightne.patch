@@ -1,0 +1,271 @@
+From: Grigory Tuboltsev <gtubolcev@gmail.com>
+Subject: [PATCH] Add D-Bus methods to get and set the screen brightness
+
+GetBrightness and SetBrightness on org.xfce.Power.Manager let other
+programs, such as the theme schedule of xfce4-settings, change the
+brightness through the power manager instead of accessing the backlight
+themselves. The value is a percentage of the range from the minimum
+level of the brightness keys and the panel slider to the maximum level,
+set without a notification. While the screen is dimmed for inactivity,
+the new level is only remembered and set when the user comes back.
+
+The step count and the minimum level of the brightness keys are now
+applied by one function, used by the keys and by both methods.
+
+Backport of https://gitlab.xfce.org/xfce/xfce4-power-manager/-/merge_requests/120
+to 4.20. The Debian source lacks src/org.xfce.Power.Manager.xml (it ships
+the generated code only), so the patch adds the whole file.
+---
+
+diff --git a/src/xfpm-backlight.c b/src/xfpm-backlight.c
+index 2ea125c9..92efb1e9 100644
+--- a/src/xfpm-backlight.c
++++ b/src/xfpm-backlight.c
+@@ -213,6 +213,27 @@ xfpm_backlight_reset_cb (XfpmIdle *idle,
+   }
+ }
+ 
++/* applies the step count and the minimum level of the brightness keys and the
++ * panel slider; the step count goes first, the default minimum depends on it */
++static void
++xfpm_backlight_update_levels (XfpmBacklight *backlight)
++{
++  guint brightness_step_count;
++  gboolean brightness_exponential;
++  gint brightness_min_level;
++
++  g_object_get (G_OBJECT (backlight->priv->conf),
++                BRIGHTNESS_STEP_COUNT, &brightness_step_count,
++                BRIGHTNESS_EXPONENTIAL, &brightness_exponential,
++                BRIGHTNESS_SLIDER_MIN_LEVEL, &brightness_min_level,
++                NULL);
++
++  xfpm_brightness_set_step_count (backlight->priv->brightness,
++                                  brightness_step_count,
++                                  brightness_exponential);
++  xfpm_brightness_set_min_level (backlight->priv->brightness, brightness_min_level);
++}
++
+ /**
+  * This callback is responsible for two functionalities in response to a user
+  * pressing the brightness key:
+@@ -586,3 +607,81 @@ xfpm_backlight_new (void)
+ 
+   return backlight;
+ }
++
++/**
++ * xfpm_backlight_get_percent:
++ * @backlight: a #XfpmBacklight
++ * @percent: (out): the brightness in percent of the range from the minimum
++ *   to the maximum level
++ *
++ * While the screen is dimmed because the user is idle, gives the level that is
++ * set when the user comes back.
++ *
++ * Returns: %TRUE on success
++ **/
++gboolean
++xfpm_backlight_get_percent (XfpmBacklight *backlight,
++                            gint *percent)
++{
++  gint32 level;
++  gint32 min_level;
++  gint32 max_level;
++
++  g_return_val_if_fail (XFPM_IS_BACKLIGHT (backlight), FALSE);
++  g_return_val_if_fail (percent != NULL, FALSE);
++
++  xfpm_backlight_update_levels (backlight);
++  min_level = xfpm_brightness_get_min_level (backlight->priv->brightness);
++  max_level = xfpm_brightness_get_max_level (backlight->priv->brightness);
++
++  /* while dimmed, the level the user comes back to */
++  if (backlight->priv->dimmed)
++    level = backlight->priv->last_level;
++  else if (!xfpm_brightness_get_level (backlight->priv->brightness, &level))
++    return FALSE;
++
++  *percent = 100 * (level - min_level) / (max_level - min_level);
++  return TRUE;
++}
++
++/**
++ * xfpm_backlight_set_percent:
++ * @backlight: a #XfpmBacklight
++ * @percent: the brightness in percent of the range from the minimum to the
++ *   maximum level, 0-100
++ *
++ * Sets the brightness without a notification, for other programs such as a
++ * schedule. 0 is the minimum level the brightness keys and the panel slider
++ * use. While the screen is dimmed because the user is idle, the level is only
++ * remembered and set when the user comes back.
++ *
++ * Returns: %TRUE on success
++ **/
++gboolean
++xfpm_backlight_set_percent (XfpmBacklight *backlight,
++                            gint percent)
++{
++  gint32 min_level;
++  gint32 max_level;
++  gint32 level;
++
++  g_return_val_if_fail (XFPM_IS_BACKLIGHT (backlight), FALSE);
++  g_return_val_if_fail (percent >= 0 && percent <= 100, FALSE);
++
++  xfpm_backlight_update_levels (backlight);
++
++  min_level = xfpm_brightness_get_min_level (backlight->priv->brightness);
++  max_level = xfpm_brightness_get_max_level (backlight->priv->brightness);
++  level = min_level + percent * (max_level - min_level) / 100;
++
++  XFPM_DEBUG ("Brightness %d%% requested, level %d%s", percent, level,
++              backlight->priv->dimmed ? " (dimmed, set on activity)" : "");
++
++  if (backlight->priv->dimmed)
++  {
++    backlight->priv->last_level = level;
++    return TRUE;
++  }
++
++  return xfpm_brightness_set_level (backlight->priv->brightness, level);
++}
+diff --git a/src/xfpm-backlight.h b/src/xfpm-backlight.h
+index 6f9845bb..17a036af 100644
+--- a/src/xfpm-backlight.h
++++ b/src/xfpm-backlight.h
+@@ -46,6 +46,12 @@ GType
+ xfpm_backlight_get_type (void) G_GNUC_CONST;
+ XfpmBacklight *
+ xfpm_backlight_new (void);
++gboolean
++xfpm_backlight_get_percent (XfpmBacklight *backlight,
++                            gint *percent);
++gboolean
++xfpm_backlight_set_percent (XfpmBacklight *backlight,
++                            gint percent);
+ 
+ G_END_DECLS
+ 
+diff --git a/src/xfpm-manager.c b/src/xfpm-manager.c
+index 2675c79f..5dd3ee02 100644
+--- a/src/xfpm-manager.c
++++ b/src/xfpm-manager.c
+@@ -1123,6 +1123,17 @@ xfpm_manager_dbus_get_info (XfpmManager *manager,
+                             GDBusMethodInvocation *invocation,
+                             gpointer user_data);
+ 
++static gboolean
++xfpm_manager_dbus_get_brightness (XfpmManager *manager,
++                                  GDBusMethodInvocation *invocation,
++                                  gpointer user_data);
++
++static gboolean
++xfpm_manager_dbus_set_brightness (XfpmManager *manager,
++                                  GDBusMethodInvocation *invocation,
++                                  gint percent,
++                                  gpointer user_data);
++
+ #include "xfce-power-manager-dbus.h"
+ 
+ static void
+@@ -1151,6 +1162,12 @@ xfpm_manager_dbus_init (XfpmManager *manager)
+   g_signal_connect_object (manager_dbus, "handle-get-info",
+                            G_CALLBACK (xfpm_manager_dbus_get_info),
+                            manager, G_CONNECT_SWAPPED);
++  g_signal_connect_object (manager_dbus, "handle-get-brightness",
++                           G_CALLBACK (xfpm_manager_dbus_get_brightness),
++                           manager, G_CONNECT_SWAPPED);
++  g_signal_connect_object (manager_dbus, "handle-set-brightness",
++                           G_CALLBACK (xfpm_manager_dbus_set_brightness),
++                           manager, G_CONNECT_SWAPPED);
+ }
+ 
+ static gboolean
+@@ -1217,3 +1234,45 @@ xfpm_manager_dbus_get_info (XfpmManager *manager,
+   xfpm_power_manager_complete_get_info (user_data, invocation, PACKAGE, VERSION, "Xfce");
+   return TRUE;
+ }
++
++static gboolean
++xfpm_manager_dbus_get_brightness (XfpmManager *manager,
++                                  GDBusMethodInvocation *invocation,
++                                  gpointer user_data)
++{
++  gint percent;
++
++  if (manager->priv->backlight == NULL)
++    g_dbus_method_invocation_return_error (invocation, XFPM_ERROR, XFPM_ERROR_NO_HARDWARE_SUPPORT,
++                                           _("No backlight device found"));
++  else if (!xfpm_backlight_get_percent (manager->priv->backlight, &percent))
++    g_dbus_method_invocation_return_error (invocation, XFPM_ERROR, XFPM_ERROR_UNKNOWN,
++                                           _("Cannot read the brightness level"));
++  else
++    xfpm_power_manager_complete_get_brightness (user_data, invocation, percent);
++
++  return TRUE;
++}
++
++static gboolean
++xfpm_manager_dbus_set_brightness (XfpmManager *manager,
++                                  GDBusMethodInvocation *invocation,
++                                  gint percent,
++                                  gpointer user_data)
++{
++  XFPM_DEBUG ("Set brightness message received: %d%%", percent);
++
++  if (manager->priv->backlight == NULL)
++    g_dbus_method_invocation_return_error (invocation, XFPM_ERROR, XFPM_ERROR_NO_HARDWARE_SUPPORT,
++                                           _("No backlight device found"));
++  else if (percent < 0 || percent > 100)
++    g_dbus_method_invocation_return_error (invocation, XFPM_ERROR, XFPM_ERROR_INVALID_ARGUMENTS,
++                                           _("The brightness must be between 0 and 100 percent"));
++  else if (!xfpm_backlight_set_percent (manager->priv->backlight, percent))
++    g_dbus_method_invocation_return_error (invocation, XFPM_ERROR, XFPM_ERROR_UNKNOWN,
++                                           _("Cannot set the brightness level"));
++  else
++    xfpm_power_manager_complete_set_brightness (user_data, invocation);
++
++  return TRUE;
++}
+diff --git a/src/org.xfce.Power.Manager.xml b/src/org.xfce.Power.Manager.xml
+new file mode 100644
+index 0000000..8b11d6d
+--- /dev/null
++++ b/src/org.xfce.Power.Manager.xml
+@@ -0,0 +1,34 @@
++<?xml version="1.0" encoding="UTF-8"?>
++
++<node name="/org/xfce/PowerManager">
++    <interface name="org.xfce.Power.Manager">
++     
++    <method name="Quit">
++    </method>
++    
++    <method name="Restart">
++    </method>
++    
++    <method name="GetConfig">
++	<arg direction="out" name="config" type="a{ss}"/>
++    </method>
++    
++    <method name="GetInfo">
++	<arg direction="out" name="name" type="s"/>
++        <arg direction="out" name="version" type="s"/>
++        <arg direction="out" name="vendor" type="s"/>
++    </method>
++
++    <!-- Screen brightness in percent (0-100) of the range from the
++         minimum level of the brightness keys to the maximum level.
++         Both fail with NoHardwareSupport when there is no backlight. -->
++    <method name="GetBrightness">
++        <arg direction="out" name="percent" type="i"/>
++    </method>
++
++    <method name="SetBrightness">
++        <arg direction="in" name="percent" type="i"/>
++    </method>
++	
++    </interface>
++</node>

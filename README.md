@@ -28,7 +28,7 @@ Each rule can change:
   Chromium and Electron apps read through the settings portal.
 - **More…** — the matching xfwm4 theme (follows "Set matching Xfwm4 theme" by default),
   the icon theme, the cursor theme, the screen brightness of a laptop (in percent,
-  set through logind, no root needed), a warmer **color temperature** of the screen
+  no root needed, see below), a warmer **color temperature** of the screen
   ("night light", e.g. 4500 K, reached gradually over a number of minutes), or a shell
   command to run.
 
@@ -38,6 +38,15 @@ stays until a later rule sets another temperature: set 6500 K (normal) in the
 morning rule. Several rules give any curve, e.g. 5000 K at sunset, 3500 K at
 22:00, 6500 K at sunrise. Don't run redshift, gammastep or a similar tool at the
 same time, they would overwrite each other.
+
+The brightness is set through xfce4-power-manager, so that it knows the new level:
+it restores it after dimming the screen, and the brightness keys step from it.
+This needs the D-Bus methods proposed in
+[xfce4-power-manager!120](https://gitlab.xfce.org/xfce/xfce4-power-manager/-/merge_requests/120);
+the releases and the PPA carry a patched xfce4-power-manager for Xubuntu 26.04 and
+Debian 13. With a stock xfce4-power-manager (e.g. on 24.04 and Arch) the brightness
+is set through logind instead, and the power manager does not know about it. Right
+after login a rule waits up to a minute for xfce4-power-manager to start.
 
 ![Schedule tab](docs/theme-schedule.png)
 
@@ -65,7 +74,9 @@ sudo apt install ./*.deb
 
 and log out and back in. The packages replace the stock ones (version suffix
 `+xfcepatches1+<release>`, e.g. `+xfcepatches1+v0.1.2`); to go back, reinstall the Ubuntu version with
-`sudo apt install --reinstall --allow-downgrades xfce4-settings=<version> xfce4-helpers=<version>`.
+`sudo apt install --reinstall --allow-downgrades xfce4-settings=<version> xfce4-helpers=<version>`
+(and the same for `xfce4-power-manager`, `xfce4-power-manager-data` and
+`xfce4-power-manager-plugins`, if you installed them too).
 
 On Arch Linux (also Manjaro, EndeavourOS) install
 `xfce4-settings-xfcepatches-*.pkg.tar.zst` from the same page with
