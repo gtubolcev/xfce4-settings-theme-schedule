@@ -85,10 +85,16 @@ touch debian/patches/series
 for p in "${PATCHES[@]}"; do
   cp "$PATCHDIR/$p" "debian/patches/xfcepatches-$p"
   echo "xfcepatches-$p" >> debian/patches/series
-  # same check as quilt --fuzz=0 in CI; the source package keeps them unapplied
-  patch -p1 -F0 --dry-run -s < "debian/patches/xfcepatches-$p" >/dev/null 2>&1 \
+done
+# same check as quilt --fuzz=0 in CI, on a copy, as a patch may build on the
+# previous ones; the source package keeps them unapplied
+CHECK=$(mktemp -d)
+cp -a . "$CHECK/src"
+for p in "${PATCHES[@]}"; do
+  patch -d "$CHECK/src" -p1 -F0 -s < "debian/patches/xfcepatches-$p" >/dev/null 2>&1 \
     || { echo "error: $p does not apply" >&2; exit 1; }
 done
+rm -rf "$CHECK"
 
 # the version of the release debs plus an upload number: a version can be
 # uploaded to the PPA only once, even after it was deleted there
