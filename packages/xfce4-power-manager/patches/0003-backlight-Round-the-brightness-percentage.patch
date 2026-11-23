@@ -1,0 +1,43 @@
+From cad54f05c942c75c344464834c24138e4c5380d6 Mon Sep 17 00:00:00 2001
+From: Grigory Tuboltsev <gtubolcev@gmail.com>
+Date: Mon, 23 Nov 2026 09:40:01 +0100
+Subject: [PATCH] backlight: Round the brightness percentage
+
+Backport of the second commit of xfce4-power-manager!120 to 4.20.
+
+xfpm_backlight_set_percent() and xfpm_backlight_get_percent() both
+truncated, so a value set over D-Bus often came back one lower, e.g.
+SetBrightness 70 and then GetBrightness 69. Round when converting the
+level back to percent, so every percentage round-trips when the
+backlight has enough levels.
+---
+ src/xfpm-backlight.c | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/src/xfpm-backlight.c b/src/xfpm-backlight.c
+index 92efb1e9..ffe99da0 100644
+--- a/src/xfpm-backlight.c
++++ b/src/xfpm-backlight.c
+@@ -39,6 +39,10 @@
+ #include <gtk/gtk.h>
+ #include <libxfce4util/libxfce4util.h>
+ 
++#ifdef HAVE_MATH_H
++#include <math.h>
++#endif
++
+ static void
+ xfpm_backlight_finalize (GObject *object);
+ 
+@@ -640,7 +644,7 @@ xfpm_backlight_get_percent (XfpmBacklight *backlight,
+   else if (!xfpm_brightness_get_level (backlight->priv->brightness, &level))
+     return FALSE;
+ 
+-  *percent = 100 * (level - min_level) / (max_level - min_level);
++  *percent = round (100.0 * (level - min_level) / (max_level - min_level));
+   return TRUE;
+ }
+ 
+-- 
+2.53.0
+
